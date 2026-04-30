@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Polygon, useMapEvents
 import L from 'leaflet';
 import { GeoFeature, WardBoundary } from '../types';
 import { useGeoLocation } from './GeoLocationProvider';
-import { MapPin, Navigation, Info, Layers } from 'lucide-react';
+import { MapPin, Navigation, Info, Layers, Plus, Minus } from 'lucide-react';
 import landmarkGeoJsonUrl from '../data/CCC_all_Landmark.geojson?url';
 
 // Fix for default marker icons in Leaflet with React
@@ -70,8 +70,13 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   const [showLandmarks, setShowLandmarks] = useState(true);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [baseMap, setBaseMap] = useState<'osm' | 'satellite' | 'hybrid'>('osm');
+  const [landmarkIconScale, setLandmarkIconScale] = useState(1);
   const [landmarkPoints, setLandmarkPoints] = useState<Array<{ lat: number; lng: number; properties: Record<string, any> }>>([]);
   const isAddingFeature = !!addFeatureType;
+
+  const clampLandmarkRadius = (r: number) => Math.min(24, Math.max(3, Math.round(r)));
+  const radiusForLandmark = (base: number, selected: boolean) =>
+    clampLandmarkRadius(base * landmarkIconScale * (selected ? 1.35 : 1));
 
   useEffect(() => {
     let mounted = true;
@@ -204,7 +209,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
               <CircleMarker
                 key={feature.id}
                 center={[feature.geometry.coordinates[1], feature.geometry.coordinates[0]]}
-                radius={isSelected ? 10 : 7}
+                radius={radiusForLandmark(7, isSelected)}
                 pathOptions={{ 
                   color: color,
                   fillColor: color, 
@@ -289,7 +294,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
           <CircleMarker
             key={`landmark_geojson_${idx}`}
             center={[p.lat, p.lng]}
-            radius={5}
+            radius={radiusForLandmark(5, false)}
             pathOptions={{
               color: getStatusColor('pending'),
               fillColor: getStatusColor('pending'),
@@ -389,10 +394,32 @@ export const MapComponent: React.FC<MapComponentProps> = ({
               </div>
             </div>
             <div className="border-t pt-2">
-              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 mb-2">
-                <input type="checkbox" checked={showLandmarks} onChange={(e) => setShowLandmarks(e.target.checked)} />
-                <span>Landmarks</span>
-              </label>
+              <div className="flex items-center justify-between gap-2 font-medium text-slate-700 mb-2">
+                <label className="flex items-center gap-2 cursor-pointer min-w-0 flex-1">
+                  <input type="checkbox" checked={showLandmarks} onChange={(e) => setShowLandmarks(e.target.checked)} />
+                  <span className="truncate">Landmarks</span>
+                </label>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandmarkIconScale((s) => Math.max(0.6, Math.round((s - 0.1) * 10) / 10))}
+                    className="h-7 w-7 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    title="Smaller landmark dots"
+                    disabled={landmarkIconScale <= 0.6}
+                  >
+                    <Minus size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLandmarkIconScale((s) => Math.min(2.4, Math.round((s + 0.1) * 10) / 10))}
+                    className="h-7 w-7 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    title="Larger landmark dots"
+                    disabled={landmarkIconScale >= 2.4}
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              </div>
               <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
                 <input type="checkbox" checked={showWards} onChange={(e) => setShowWards(e.target.checked)} />
                 <span>Ward Boundaries</span>
