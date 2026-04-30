@@ -138,10 +138,14 @@ const AppContent: React.FC = () => {
 
         // Remove duplicate landmark docs for the same FID (older random-id records), then write canonical doc.
         if (rec.fid !== undefined) {
-          const dupSnap = await getDocs(
-            query(collection(db, 'features'), where('attributes.FID', '==', rec.fid))
-          );
-          for (const d of dupSnap.docs) {
+          const dupSnaps = await Promise.all([
+            getDocs(query(collection(db, 'features'), where('attributes.FID', '==', rec.fid))),
+            getDocs(query(collection(db, 'features'), where('attributes.FID', '==', String(rec.fid))))
+          ]);
+          const seenDupIds = new Set<string>();
+          for (const d of [...dupSnaps[0].docs, ...dupSnaps[1].docs]) {
+            if (seenDupIds.has(d.id)) continue;
+            seenDupIds.add(d.id);
             if (d.id === rec.id) continue;
             await commitIfNeeded(1);
             batch.delete(doc(db, 'features', d.id));
