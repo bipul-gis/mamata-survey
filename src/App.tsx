@@ -14,6 +14,7 @@ import { collection, addDoc, serverTimestamp, writeBatch, doc, query, where, get
 import { db, handleFirestoreError, OperationType } from './lib/firebase';
 import wardsData from './data/ccc_wards.json';
 import landmarkGeoJsonUrl from './data/CCC_all_Landmark.geojson?url';
+import shpwrite from '@mapbox/shp-write';
 
 const AppContent: React.FC = () => {
   const { user, userProfile, loading: authLoading, logout } = useAuth();
@@ -27,6 +28,9 @@ const AppContent: React.FC = () => {
   const [selectedQuestionnaire, setSelectedQuestionnaire] = useState<Questionnaire | null>(null);
   const [questionnaireLocation, setQuestionnaireLocation] = useState<{ lat: number; lng: number; ward?: string } | null>(null);
   const [activeTab, setActiveTab] = useState<'map' | 'list'>('map');
+  const [isImportingLandmarks, setIsImportingLandmarks] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ total: number; processed: number; imported: number; skipped: number } | null>(null);
+  const [importNotice, setImportNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const isAdmin = userProfile?.role === 'admin' && userProfile?.status === 'approved';
   const visibleFeatures = features;
@@ -45,7 +49,9 @@ const AppContent: React.FC = () => {
   };
 
   const importLandmarkGeoJson = async () => {
-    if (!isAdmin) return;
+    if (!isAdmin || isImportingLandmarks) return;
+    setIsImportingLandmarks(true);
+    setImportNotice(null);
     try {
       // Use Vite asset URL so this works in production (e.g., Vercel) and local dev.
       const resp = await fetch(landmarkGeoJsonUrl);
@@ -58,7 +64,9 @@ const AppContent: React.FC = () => {
         : [];
 
       if (points.length === 0) {
-        alert('No Point features found in CCC_all_Landmark.geojson');
+        setImportNotice({ type: 'error', message: 'No Point features found in CCC_all_Landmark.geojson.' });
+        setImportProgress(null);
+        setIsImportingLandmarks(false);
         return;
       }
 
@@ -70,8 +78,10 @@ const AppContent: React.FC = () => {
       // Keep original imported data intact: never overwrite existing landmark docs on re-import.
       let importedCount = 0;
       let skippedCount = 0;
+      let processedCount = 0;
       const readChunkSize = 30; // Firestore "in" query limit
       const writeChunkSize = 400;
+      setImportProgress({ total: pointRecords.length, processed: 0, imported: 0, skipped: 0 });
 
       for (let i = 0; i < pointRecords.length; i += readChunkSize) {
         const readChunk = pointRecords.slice(i, i + readChunkSize);
@@ -106,58 +116,202 @@ const AppContent: React.FC = () => {
           });
           await batch.commit();
           importedCount += writeChunk.length;
+          processedCount += writeChunk.length;
+          setImportProgress({
+            total: pointRecords.length,
+            processed: processedCount,
+            imported: importedCount,
+            skipped: skippedCount
+          });
         }
+        processedCount += readChunk.length - newRecords.length;
+        setImportProgress({
+          total: pointRecords.length,
+          processed: processedCount,
+          imported: importedCount,
+          skipped: skippedCount
+        });
       }
 
-      alert(`Import complete. New: ${importedCount}, skipped existing: ${skippedCount}.`);
+      setImportProgress({
+        total: pointRecords.length,
+        processed: pointRecords.length,
+        imported: importedCount,
+        skipped: skippedCount
+      });
+      setImportNotice({
+        type: 'success',
+        message: `Import complete. New: ${importedCount}, skipped existing: ${skippedCount}.`
+      });
     } catch (e) {
       console.error(e);
-      alert('Landmark GeoJSON import failed: ' + e);
+      setImportNotice({ type: 'error', message: 'Landmark GeoJSON import failed: ' + e });
+    } finally {
+      setIsImportingLandmarks(false);
     }
   };
 
-  const downloadChangedLandmarkJson = () => {
+  const downloadChangedLandmarkShp = async () => {
     if (!isAdmin) return;
+    setImportNotice(null);
 
-    const changedFeatures = visibleFeatures.filter((feature) => {
-      const source = String(feature.attributes?.__source || '');
-      const isLandmarkSource = source.includes('ccc_landmark');
-      if (!isLandmarkSource) return false;
-
-      // "Changed/updated" means it is no longer pristine imported state.
-      return (
-        feature.updatedBy !== 'ccc_landmark_import' ||
-        feature.status !== 'pending' ||
-        Boolean(feature.remarks)
-      );
-    });
-
-    const exportPayload = {
-      exportedAt: new Date().toISOString(),
-      totalChanged: changedFeatures.length,
-      features: changedFeatures.map((feature) => ({
-        id: feature.id,
-        type: feature.type,
-        geometry: feature.geometry,
-        status: feature.status,
-        remarks: feature.remarks ?? null,
-        createdBy: feature.createdBy,
-        updatedBy: feature.updatedBy,
-        updatedAt: feature.updatedAt,
-        collectorLocation: feature.collectorLocation ?? null,
-        attributes: feature.attributes
-      }))
+    const valuesEqual = (a: unknown, b: unknown) => {
+      if (a === b) return true;
+      if ((a === null || a === undefined || a === '') && (b === null || b === undefined || b === '')) {
+        return true;
+      }
+      const an = Number(a);
+      const bn = Number(b);
+      if (Number.isFinite(an) && Number.isFinite(bn) && String(a).trim() !== '' && String(b).trim() !== '') {
+        return an === bn;
+      }
+      return String(a ?? '') === String(b ?? '');
+    };
+    const isPointGeometrySame = (a: any, b: any) => {
+      const ac = Array.isArray(a?.coordinates) ? a.coordinates : [];
+      const bc = Array.isArray(b?.coordinates) ? b.coordinates : [];
+      if (ac.length < 2 || bc.length < 2) return false;
+      const ax = Number(ac[0]);
+      const ay = Number(ac[1]);
+      const bx = Number(bc[0]);
+      const by = Number(bc[1]);
+      if (![ax, ay, bx, by].every(Number.isFinite)) return false;
+      const eps = 1e-9;
+      return Math.abs(ax - bx) <= eps && Math.abs(ay - by) <= eps;
     };
 
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `changed_landmarks_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+    let baselineByFid = new Map<string, { geometry: any; properties: Record<string, any> }>();
+    try {
+      const baselineResp = await fetch(landmarkGeoJsonUrl);
+      if (!baselineResp.ok) {
+        throw new Error(`Failed to load baseline GeoJSON (${baselineResp.status})`);
+      }
+      const baseline = await baselineResp.json();
+      const baselinePoints = Array.isArray(baseline?.features)
+        ? baseline.features.filter((f: any) => f?.geometry?.type === 'Point')
+        : [];
+      baselineByFid = new Map(
+        baselinePoints.map((f: any) => [
+          String(f?.properties?.FID ?? ''),
+          { geometry: f?.geometry, properties: f?.properties || {} }
+        ])
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setImportNotice({ type: 'error', message: `Failed to load baseline landmark data: ${message}` });
+      return;
+    }
+
+    const changedFeatures = visibleFeatures.filter((feature) => {
+      if (feature.geometry?.type !== 'Point') return false;
+      const source = String(feature.attributes?.__source || '');
+      const isLandmarkRelated = source.includes('landmark');
+      if (!isLandmarkRelated) return false;
+
+      // Newly added landmark points should always be exported as changed.
+      if (source.includes('landmark_manual')) return true;
+
+      const fid = feature.attributes?.FID;
+      const baselineEntry = baselineByFid.get(String(fid ?? ''));
+      if (!baselineEntry) return true;
+
+      // Rejected/verified/remarks imply change.
+      if (feature.status !== 'pending' || Boolean(feature.remarks)) return true;
+
+      if (!isPointGeometrySame(feature.geometry, baselineEntry.geometry)) return true;
+
+      const currentProps = Object.fromEntries(
+        Object.entries(feature.attributes || {}).filter(([k]) => !k.startsWith('__'))
+      );
+      const baselineProps = baselineEntry.properties || {};
+      const keys = new Set([...Object.keys(currentProps), ...Object.keys(baselineProps)]);
+      for (const key of keys) {
+        if (!valuesEqual(currentProps[key], baselineProps[key])) return true;
+      }
+      return false;
+    });
+    if (changedFeatures.length === 0) {
+      setImportNotice({ type: 'error', message: 'No changed landmark point features available for SHP download.' });
+      return;
+    }
+
+    const toNumber = (v: unknown): number | null => {
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const toPrimitive = (v: unknown): string | number | boolean => {
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
+      if (v === null || v === undefined) return '';
+      return JSON.stringify(v);
+    };
+
+    const exportPayload = {
+      type: 'FeatureCollection',
+      name: 'changed_landmarks',
+      features: changedFeatures
+        .map((feature) => {
+          const coords = Array.isArray(feature.geometry?.coordinates) ? feature.geometry.coordinates : [];
+          const lng = toNumber(coords[0]);
+          const lat = toNumber(coords[1]);
+          if (lng === null || lat === null) return null;
+
+          const sanitizedAttributes = Object.fromEntries(
+            Object.entries(feature.attributes || {}).map(([k, v]) => [k, toPrimitive(v)])
+          );
+
+          return {
+            type: 'Feature',
+            id: feature.attributes?.FID ?? feature.id,
+            geometry: { type: 'Point', coordinates: [lng, lat] },
+            properties: {
+              ...sanitizedAttributes,
+              ChangeStatus: feature.status,
+              ChangeRemarks: feature.remarks ?? '',
+              ChangeBy: feature.updatedBy ?? '',
+              ChangeAt: feature.updatedAt ?? '',
+              GPS_Lat: feature.collectorLocation?.lat ?? '',
+              GPS_Lng: feature.collectorLocation?.lng ?? '',
+              GPS_Acc: feature.collectorLocation?.accuracy ?? ''
+            }
+          };
+        })
+        .filter(Boolean)
+    };
+    // EPSG:4326 WGS84 projection for shapefile .prj
+    const wgs84Prj =
+      'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",' +
+      'SPHEROID["WGS_1984",6378137.0,298.257223563]],' +
+      'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
+
+    try {
+      const zipResult = await shpwrite.zip(exportPayload as any, {
+        folder: 'changed_landmarks',
+        types: { point: 'changed_landmarks' },
+        prj: wgs84Prj,
+        outputType: 'blob',
+        compression: 'STORE'
+      });
+
+      const blob = zipResult instanceof Blob
+        ? zipResult
+        : new Blob([zipResult as BlobPart], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `changed_landmarks_${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      setImportNotice({
+        type: 'success',
+        message: `SHP download ready. Exported ${(exportPayload.features as any[]).length} changed point feature(s) as ZIP.`
+      });
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
+      setImportNotice({ type: 'error', message: `Failed to generate SHP ZIP download: ${message}` });
+    }
   };
 
   const handleMapClick = async (lat: number, lng: number) => {
@@ -653,21 +807,56 @@ const AppContent: React.FC = () => {
                   <span className="font-bold text-amber-600">{visibleFeatures.filter(f => f.status === 'pending').length}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500">Rejected</span>
+                  <span className="font-bold text-red-600">{visibleFeatures.filter(f => f.status === 'rejected').length}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
                   <span className="text-slate-500">Total</span>
                   <span className="font-bold">{visibleFeatures.length}</span>
                 </div>
                 <button 
                   onClick={importLandmarkGeoJson}
-                  className="w-full mt-1 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold uppercase transition-colors"
+                  disabled={isImportingLandmarks}
+                  className="w-full mt-1 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold uppercase transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Import Landmark GeoJSON
+                  {isImportingLandmarks ? 'Importing Landmarks...' : 'Import Landmark GeoJSON'}
                 </button>
+                {importProgress && (
+                  <div className="space-y-1">
+                    <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-600 transition-all duration-200"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round((importProgress.processed / Math.max(1, importProgress.total)) * 100)
+                          )}%`
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-600">
+                      {importProgress.processed}/{importProgress.total} processed | New: {importProgress.imported} | Skipped: {importProgress.skipped}
+                    </p>
+                  </div>
+                )}
                 <button
-                  onClick={downloadChangedLandmarkJson}
-                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold uppercase transition-colors"
+                  onClick={downloadChangedLandmarkShp}
+                  disabled={isImportingLandmarks}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold uppercase transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Download Changed JSON
+                  Download Changed SHP
                 </button>
+                {importNotice && (
+                  <div
+                    className={`text-[10px] font-semibold rounded-lg px-2 py-1 ${
+                      importNotice.type === 'success'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {importNotice.message}
+                  </div>
+                )}
               </div>
             </div>
           </div>
