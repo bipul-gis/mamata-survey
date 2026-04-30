@@ -47,7 +47,6 @@ const AppContent: React.FC = () => {
   };
 
   const importedLandmarkFeatures = visibleFeatures.filter(isImportedLandmarkPoint);
-  const otherFeaturesCount = Math.max(0, visibleFeatures.length - importedLandmarkFeatures.length);
 
   const distanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
     const toRad = (d: number) => (d * Math.PI) / 180;
@@ -918,10 +917,6 @@ const AppContent: React.FC = () => {
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-slate-500">Landmarks (imported)</span>
                   <span className="font-bold">{importedLandmarkFeatures.length}</span>
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Other features</span>
-                  <span className="font-bold text-slate-700">{otherFeaturesCount}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs border-t border-slate-100 pt-2">
                   <span className="text-slate-500">Total (all)</span>
