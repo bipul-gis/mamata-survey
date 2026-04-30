@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Polygon, useMapEvents, Circle, CircleMarker, GeoJSON, Tooltip, useMap, LayersControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Polygon, useMapEvents, Circle, CircleMarker, GeoJSON, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { GeoFeature, WardBoundary } from '../types';
 import { useGeoLocation } from './GeoLocationProvider';
@@ -66,6 +66,10 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   showPointAddBuffer = false
 }) => {
   const { location } = useGeoLocation();
+  const [showWards, setShowWards] = useState(true);
+  const [showLandmarks, setShowLandmarks] = useState(true);
+  const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [baseMap, setBaseMap] = useState<'osm' | 'satellite' | 'hybrid'>('osm');
   const [landmarkPoints, setLandmarkPoints] = useState<Array<{ lat: number; lng: number; properties: Record<string, any> }>>([]);
   const isAddingFeature = !!addFeatureType;
 
@@ -123,44 +127,43 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         zoom={13} 
         className="w-full h-full"
       >
-        <LayersControl position="topright">
-          <LayersControl.BaseLayer checked name="OpenStreetMap">
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-          </LayersControl.BaseLayer>
-          <LayersControl.BaseLayer name="Satellite Imagery">
-            <TileLayer
-              attribution='Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
-              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-            />
-          </LayersControl.BaseLayer>
-          <LayersControl.BaseLayer name="Google Hybrid">
-            <TileLayer
-              attribution='Map data &copy; Google'
-              url="https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
-              subdomains={['mt0', 'mt1', 'mt2', 'mt3']}
-              maxZoom={20}
-            />
-          </LayersControl.BaseLayer>
+        {baseMap === 'osm' && (
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+        )}
+        {baseMap === 'satellite' && (
+          <TileLayer
+            attribution='Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          />
+        )}
+        {baseMap === 'hybrid' && (
+          <TileLayer
+            attribution='Map data &copy; Google'
+            url="https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+            subdomains={['mt0', 'mt1', 'mt2', 'mt3']}
+            maxZoom={20}
+          />
+        )}
 
-          <LayersControl.Overlay checked name="Ward Boundaries">
-            <GeoJSON 
-              data={wards} 
-              style={wardStyle}
-              onEachFeature={(feature, layer) => {
-                if (feature.properties && feature.properties.WARDNAME) {
-                  layer.bindTooltip(feature.properties.WARDNAME, {
-                    permanent: true,
-                    direction: 'center',
-                    className: 'ward-label'
-                  });
-                }
-              }}
-            />
-          </LayersControl.Overlay>
-        </LayersControl>
+        {/* Ward Boundaries (Non-editable) */}
+        {showWards && wards && (
+          <GeoJSON 
+            data={wards} 
+            style={wardStyle}
+            onEachFeature={(feature, layer) => {
+              if (feature.properties && feature.properties.WARDNAME) {
+                layer.bindTooltip(feature.properties.WARDNAME, {
+                  permanent: true,
+                  direction: 'center',
+                  className: 'ward-label'
+                });
+              }
+            }}
+          />
+        )}
 
         {/* Existing Features */}
         {features.map(feature => {
@@ -168,6 +171,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
           const color = getStatusColor(feature.status);
 
           if (feature.type === 'point') {
+            if (!showLandmarks) return null;
             return (
               <CircleMarker
                 key={feature.id}
@@ -247,7 +251,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         {/* Landmark points from CCC_all_Landmark.geojson (read-only visual layer).
             Hide a GeoJSON point when a matching Firestore feature exists so users
             always interact with the live/editable record after first edit/create. */}
-        {landmarkPoints
+        {showLandmarks && landmarkPoints
           .filter((p) => {
             const fid = p.properties?.FID;
             const hasFirestoreMatch = features.some((f) => {
@@ -336,6 +340,47 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         {isAddingFeature && onMapClick && <MapEvents onClick={onMapClick} />}
       </MapContainer>
 
+      {/* Click-to-open layer panel */}
+      <div className="absolute top-4 right-4 z-[1000] flex flex-col items-end gap-2">
+        <button
+          onClick={() => setShowLayerPanel((v) => !v)}
+          className="p-3 rounded-xl shadow-lg bg-white text-blue-600 hover:bg-blue-50 transition-all"
+          title="Layers"
+        >
+          <Layers size={20} />
+        </button>
+        {showLayerPanel && (
+          <div className="w-56 bg-white rounded-xl shadow-xl border border-slate-200 p-3 text-xs space-y-3">
+            <div>
+              <p className="font-bold text-slate-700 mb-2">Basemap</p>
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="basemap" checked={baseMap === 'osm'} onChange={() => setBaseMap('osm')} />
+                  <span>OpenStreetMap</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="basemap" checked={baseMap === 'satellite'} onChange={() => setBaseMap('satellite')} />
+                  <span>Satellite Imagery</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="basemap" checked={baseMap === 'hybrid'} onChange={() => setBaseMap('hybrid')} />
+                  <span>Google Hybrid</span>
+                </label>
+              </div>
+            </div>
+            <div className="border-t pt-2">
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 mb-2">
+                <input type="checkbox" checked={showLandmarks} onChange={(e) => setShowLandmarks(e.target.checked)} />
+                <span>Landmarks</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                <input type="checkbox" checked={showWards} onChange={(e) => setShowWards(e.target.checked)} />
+                <span>Ward Boundaries</span>
+              </label>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

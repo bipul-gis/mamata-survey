@@ -33,6 +33,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      setLoading(true);
       const isWhitelistedAdmin =
         user.email === 'bipul.paul@eqmscl.com' ||
         user.email === 'admin@ccc.gov.bd';
@@ -50,8 +51,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         role: isWhitelistedAdmin ? 'admin' : 'enumerator',
         status: isWhitelistedAdmin ? 'approved' : 'pending'
       };
-      setUserProfile(optimisticProfile);
-      setLoading(false);
+      // Keep loading until first user-profile snapshot arrives to avoid
+      // "pending" flicker for already-approved enumerators on login.
+      setUserProfile(null);
 
       // Listen for admin approvals / status changes in real-time.
       let initializedDoc = false;
@@ -67,9 +69,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               try {
                 await setDoc(userDocRef, optimisticProfile);
                 setUserProfile(optimisticProfile);
+                setLoading(false);
               } catch (e) {
                 console.error('AuthProvider: failed creating user doc', e);
                 setUserProfile(optimisticProfile);
+                setLoading(false);
               }
             })();
             return;
@@ -83,14 +87,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               void setDoc(userDocRef, updatedProfile);
             }
             setUserProfile(updatedProfile);
+            setLoading(false);
           } else {
             setUserProfile(profile);
+            setLoading(false);
           }
         },
         (err) => {
           console.error('AuthProvider: onSnapshot user doc failed', err);
           // Keep the optimistic profile so user sees correct gating (pending/approved).
           setUserProfile(optimisticProfile);
+          setLoading(false);
         }
       );
     });

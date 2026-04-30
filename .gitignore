@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local GIS sidecars / locks / scratch exports (should not be committed)
+*.sr.lock
+src/data/v2/
