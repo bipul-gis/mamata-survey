@@ -100,8 +100,8 @@ const AppContent: React.FC = () => {
       }
 
       const confirmed = window.confirm(
-        'This will REPLACE all previously imported landmark data from Firestore with the GeoJSON file.\n\n' +
-          'Any edits, verification status, rejection remarks, or other changes to those landmark records will be lost.\n\n' +
+        'This will DELETE ALL FEATURES currently stored in Firestore and replace them ONLY with this GeoJSON import.\n\n' +
+          'Any non-import features (lines/polygons/manual points/etc.) will be permanently removed.\n\n' +
           'Continue?'
       );
       if (!confirmed) {
@@ -124,8 +124,7 @@ const AppContent: React.FC = () => {
 
       const MAX_OPS = 450;
 
-      // 1) Remove all previously imported CCC landmark documents (batched deletes; no per-FID queries).
-      const landmarkSources = ['ccc_landmark', 'ccc_landmark_geojson', 'ccc_landmark_import', 'landmark_manual'];
+      // 1) Delete ALL documents in `features` (admin-only delete rule), then import only GeoJSON points.
       const pageSize = 450;
 
       let batch = writeBatch(db);
@@ -138,29 +137,22 @@ const AppContent: React.FC = () => {
         }
       };
 
-      for (const src of landmarkSources) {
-        let cursor: any = null;
-        while (true) {
-          const base = query(
-            collection(db, 'features'),
-            where('attributes.__source', '==', src),
-            orderBy(documentId()),
-            limit(pageSize)
-          );
-          const q = cursor ? query(base, startAfter(cursor)) : base;
-          const snap = await getDocs(q);
-          if (snap.empty) break;
+      let cursor: any = null;
+      while (true) {
+        const base = query(collection(db, 'features'), orderBy(documentId()), limit(pageSize));
+        const q = cursor ? query(base, startAfter(cursor)) : base;
+        const snap = await getDocs(q);
+        if (snap.empty) break;
 
-          for (const d of snap.docs) {
-            await commitIfNeeded(1);
-            batch.delete(doc(db, 'features', d.id));
-            ops += 1;
-            removedCount += 1;
-          }
-
-          cursor = snap.docs[snap.docs.length - 1];
-          if (snap.docs.length < pageSize) break;
+        for (const d of snap.docs) {
+          await commitIfNeeded(1);
+          batch.delete(doc(db, 'features', d.id));
+          ops += 1;
+          removedCount += 1;
         }
+
+        cursor = snap.docs[snap.docs.length - 1];
+        if (snap.docs.length < pageSize) break;
       }
 
       if (ops > 0) {
