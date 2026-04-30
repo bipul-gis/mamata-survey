@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Polygon, useMapEvents, Circle, CircleMarker, GeoJSON, Tooltip, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Polygon, useMapEvents, Circle, CircleMarker, GeoJSON, Tooltip, useMap, LayersControl } from 'react-leaflet';
 import L from 'leaflet';
 import { GeoFeature, WardBoundary } from '../types';
 import { useGeoLocation } from './GeoLocationProvider';
@@ -66,7 +66,6 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   showPointAddBuffer = false
 }) => {
   const { location } = useGeoLocation();
-  const [showWards, setShowWards] = useState(true);
   const [landmarkPoints, setLandmarkPoints] = useState<Array<{ lat: number; lng: number; properties: Record<string, any> }>>([]);
   const isAddingFeature = !!addFeatureType;
 
@@ -124,27 +123,44 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         zoom={13} 
         className="w-full h-full"
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <LayersControl position="topright">
+          <LayersControl.BaseLayer checked name="OpenStreetMap">
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+          </LayersControl.BaseLayer>
+          <LayersControl.BaseLayer name="Satellite Imagery">
+            <TileLayer
+              attribution='Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            />
+          </LayersControl.BaseLayer>
+          <LayersControl.BaseLayer name="Google Hybrid">
+            <TileLayer
+              attribution='Map data &copy; Google'
+              url="https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+              subdomains={['mt0', 'mt1', 'mt2', 'mt3']}
+              maxZoom={20}
+            />
+          </LayersControl.BaseLayer>
 
-        {/* Ward Boundaries (Non-editable) */}
-        {showWards && wards && (
-          <GeoJSON 
-            data={wards} 
-            style={wardStyle}
-            onEachFeature={(feature, layer) => {
-              if (feature.properties && feature.properties.WARDNAME) {
-                layer.bindTooltip(feature.properties.WARDNAME, {
-                  permanent: true,
-                  direction: 'center',
-                  className: 'ward-label'
-                });
-              }
-            }}
-          />
-        )}
+          <LayersControl.Overlay checked name="Ward Boundaries">
+            <GeoJSON 
+              data={wards} 
+              style={wardStyle}
+              onEachFeature={(feature, layer) => {
+                if (feature.properties && feature.properties.WARDNAME) {
+                  layer.bindTooltip(feature.properties.WARDNAME, {
+                    permanent: true,
+                    direction: 'center',
+                    className: 'ward-label'
+                  });
+                }
+              }}
+            />
+          </LayersControl.Overlay>
+        </LayersControl>
 
         {/* Existing Features */}
         {features.map(feature => {
@@ -319,17 +335,6 @@ export const MapComponent: React.FC<MapComponentProps> = ({
 
         {isAddingFeature && onMapClick && <MapEvents onClick={onMapClick} />}
       </MapContainer>
-
-      {/* Map UI Controls */}
-      <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
-        <button 
-          onClick={() => setShowWards(!showWards)}
-          className={`p-3 rounded-xl shadow-lg transition-all ${showWards ? 'bg-white text-blue-600' : 'bg-gray-100 text-gray-500'}`}
-          title="Toggle Wards"
-        >
-          <Layers size={20} />
-        </button>
-      </div>
 
     </div>
   );
