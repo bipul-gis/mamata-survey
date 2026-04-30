@@ -10,7 +10,7 @@ import { QuestionnaireForm } from './components/QuestionnaireForm';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { GeoFeature, WardBoundary, Questionnaire } from './types';
 import { MapPin, Plus, List, LogOut, Shield, Compass, Activity, CheckCircle2, UserPlus, FileText, Database, Clock, AlertCircle } from 'lucide-react';
-import { collection, addDoc, serverTimestamp, writeBatch, doc, query, where, getDocs, documentId } from 'firebase/firestore';
+import { collection, addDoc, setDoc, serverTimestamp, writeBatch, doc, query, where, getDocs, documentId } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './lib/firebase';
 import wardsData from './data/ccc_wards.json';
 import landmarkGeoJsonUrl from './data/CCC_all_Landmark.geojson?url';
@@ -46,6 +46,21 @@ const AppContent: React.FC = () => {
       Math.sin(dLng / 2) * Math.sin(dLng / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
+  };
+
+  const normalizeLandmarkFid = (value: unknown): number | undefined => {
+    if (value === null || value === undefined || value === '') return undefined;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const n = Number(String(value).trim());
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const fidsEqual = (a: unknown, b: unknown) => {
+    if (a === b) return true;
+    const na = normalizeLandmarkFid(a);
+    const nb = normalizeLandmarkFid(b);
+    if (na === undefined || nb === undefined) return false;
+    return na === nb;
   };
 
   const importLandmarkGeoJson = async () => {
@@ -425,18 +440,24 @@ const AppContent: React.FC = () => {
   const handleLandmarkPointSelect = async (point: { lat: number; lng: number; properties: Record<string, any> }) => {
     if (!user) return;
 
-    const fid = point.properties?.FID;
-    const existing = features.find((f) =>
-      f.type === 'point' &&
-      (
-        (fid !== undefined && f.attributes?.FID === fid) ||
-        (
-          Array.isArray(f.geometry?.coordinates) &&
-          Math.abs((f.geometry.coordinates[1] ?? 0) - point.lat) < 0.0000001 &&
-          Math.abs((f.geometry.coordinates[0] ?? 0) - point.lng) < 0.0000001
-        )
-      )
-    );
+    const fid = normalizeLandmarkFid(point.properties?.FID);
+    const attributes = {
+      ...point.properties,
+      ...(fid !== undefined ? { FID: fid } : {}),
+      __source: 'ccc_landmark_geojson'
+    };
+
+    const existing = features.find((f) => {
+      if (f.type !== 'point') return false;
+      if (fid !== undefined) {
+        return fidsEqual(f.attributes?.FID, fid);
+      }
+      if (!Array.isArray(f.geometry?.coordinates)) return false;
+      return (
+        Math.abs((f.geometry.coordinates[1] ?? 0) - point.lat) < 0.0000001 &&
+        Math.abs((f.geometry.coordinates[0] ?? 0) - point.lng) < 0.0000001
+      );
+    });
 
     if (existing) {
       setSelectedFeature(existing);
@@ -448,17 +469,54 @@ const AppContent: React.FC = () => {
       // No GPS-distance restriction here: user requested 10m rule only for
       // explicit "add feature" mode (map click), not edit/delete/attribute edit flow.
 
+      const featureId = fid !== undefined ? `landmark_${fid}` : null;
+      if (featureId) {
+        const ref = doc(db, 'features', featureId);
+        await setDoc(
+          ref,
+          {
+            type: 'point',
+            geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
+            attributes,
+            status: 'pending',
+            createdBy: user.email,
+            createdByUid: user.uid,
+            updatedBy: user.email,
+            updatedByUid: user.uid,
+            updatedAt: serverTimestamp(),
+            ...(location && {
+              collectorLocation: {
+                lat: location.lat,
+                lng: location.lng,
+                accuracy: location.accuracy
+              }
+            })
+          },
+          { merge: true }
+        );
+
+        setSelectedFeature({
+          id: featureId,
+          type: 'point',
+          geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
+          attributes,
+          status: 'pending',
+          createdBy: user.email || 'user',
+          updatedBy: user.email || 'user',
+          updatedAt: new Date().toISOString()
+        } as GeoFeature);
+        return;
+      }
+
       const docRef = await addDoc(collection(db, 'features'), {
         type: 'point',
         geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
-        attributes: {
-          ...point.properties,
-          __source: 'ccc_landmark_geojson'
-        },
+        attributes,
         status: 'pending',
         createdBy: user.email,
         createdByUid: user.uid,
         updatedBy: user.email,
+        updatedByUid: user.uid,
         updatedAt: serverTimestamp(),
         ...(location && {
           collectorLocation: {
@@ -473,10 +531,7 @@ const AppContent: React.FC = () => {
         id: docRef.id,
         type: 'point',
         geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
-        attributes: {
-          ...point.properties,
-          __source: 'ccc_landmark_geojson'
-        },
+        attributes,
         status: 'pending',
         createdBy: user.email || 'user',
         updatedBy: user.email || 'user',
